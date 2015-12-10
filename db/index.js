@@ -1,11 +1,5 @@
-var knex = require('knex')({
-  client: 'postgresql',
-  connection: {
-    host: "127.0.0.1",
-    database: 'stockduel',
-    user: 'postgres',
-    password: 'postgres'
-  }
-});
+var config = require('./knexfile.js');
+var env = 'development';
+var knex = require('knex')(config);
 
 module.exports = knex;
