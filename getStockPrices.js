@@ -1,47 +1,49 @@
 #!/usr/local/bin/node
 
-var fs = require('fs');
 var Promise = require('bluebird');
 var request = require('request');
+var knex = require('./db/index');
 
-var api = 'https://query.yahooapis.com/v1/public/yql';
-var queryLeft = '?q=select%20*%20from%20yahoo.finance.quotes%20where%20symbol%20in("';
-var queryRight = '")&format=json&diagnostics=true&env=store://datatables.org/alltableswithkeys&callback=';
-
-
-var INPUT = __dirname + '/output/stocklist.json';
-var OUTPUT = __dirname + '/output/stocklistPrices.json';
-
-var readFile = Promise.promisify(fs.readFile);
-var writeFile = Promise.promisify(fs.writeFile);
-
-readFile(INPUT)
-  .then(function (json) {
-    return JSON.parse(json);
-  })
+knex('stocks').select('symbol')
   .then(function (stocks) {
-    console.log(new Date(), 'retrieving');
-    return queueStocks(stocks);
+    console.log(new Date(), 'retrieving stock data');
+    return getStockData(stocks);
   })
   .then(function (prices) {
-    console.log(new Date(), 'parse start');
+    console.log(new Date(), 'persisting stock data');
     var stockData = parseStockData(prices);
-    var dateStamp = '/*\n Timestamp: ' + new Date() + '\n*/\n';
-    stockData = dateStamp + JSON.stringify(stockData, null, 4);
-    return writeFile(OUTPUT, stockData);
+    return Promise.map(stockData, function (stock) {
+      stock.timestamp = new Date();
+      return Promise.all([
+        knex('stock_prices')
+        .where('symbol', stock.symbol)
+        .update(stock),
+        knex('stock_prices_archive').insert(stock)
+      ]);
+    });
+  })
+  .then(function () {
+    console.log(new Date(), 'finished updating');
+    knex.destroy();
   })
   .catch(function (err) {
     console.log('ERROR: ', err);
+    knex.destroy();
   });
 
-function getPrices(stocks) {
+function queryAPI(stocks) {
+  var api = 'https://query.yahooapis.com/v1/public/yql';
+
   return new Promise(function (resolve, reject) {
 
-    var symbols = stocks.map(function (stock) {
-      return stock.Symbol;
+    var symbolQuery = stocks.map(function (stock) {
+      return stock.symbol;
     }).join(',%20');
 
-    var query = api + queryLeft + symbols + queryRight;
+    var query = api +
+      '?q=select%20*%20from%20yahoo.finance.quotes%20where%20symbol%20in("' +
+      symbolQuery +
+      '")&format=json&diagnostics=true&env=store://datatables.org/alltableswithkeys&callback=';
 
     request(query, function (error, response, body) {
       if (!error && response.statusCode == 200) {
@@ -54,40 +56,40 @@ function getPrices(stocks) {
   });
 }
 
-function queueStocks(stocks) {
+function getStockData(stocks) {
   var LIMIT = 100;
-  var prices = [];
+  var stockData = [];
   for (var i = 0; i < stocks.length; i += LIMIT) {
-    stocklist = stocks.slice(i, i + LIMIT);
-    prices.push(getPrices(stocklist));
+    batch = stocks.slice(i, i + LIMIT);
+    stockData.push(queryAPI(batch));
   }
-  return Promise.all(prices);
+  return Promise.all(stockData);
 }
 
 function parseStockData(prices) {
   return [].concat.apply([], prices)
     .map(function (stock) {
       return {
-        Symbol: stock.symbol,
-        Bid: stock.Bid,
-        Ask: stock.Ask,
-        Change: stock.Change,
-        DaysLow: stock.DaysLow,
-        DaysHigh: stock.DaysHigh,
-        YearLow: stock.YearLow,
-        YearHigh: stock.YearHigh,
-        EarningsShare: stock.EarningsShare,
-        EPSEstimateCurrentYear: stock.EPSEstimateCurrentYear,
-        EPSEstimateNextYear: stock.EPSEstimateNextYear,
-        MarketCapitalization: stock.MarketCapitalization,
-        EBITDA: stock.EBITDA,
-        DaysRange: stock.DaysRange,
-        Open: stock.open,
-        PreviousClose: stock.PreviousClose,
-        PERatio: stock.PERatio,
-        PEGRatio: stock.PEGRatio,
-        Volume: stock.PEGRatio,
-        PercentChange: stock.PercentChange
+        symbol: stock.symbol,
+        bid: stock.Bid,
+        ask: stock.Ask,
+        change: stock.Change,
+        days_low: stock.DaysLow,
+        days_high: stock.DaysHigh,
+        year_low: stock.YearLow,
+        year_high: stock.YearHigh,
+        earnings_share: stock.EarningsShare,
+        eps_estimate_current_year: stock.EPSEstimateCurrentYear,
+        eps_estimate_next_year: stock.EPSEstimateNextYear,
+        market_capitalization: stock.MarketCapitalization,
+        ebitda: stock.EBITDA,
+        days_range: stock.DaysRange,
+        open: stock.open,
+        previous_close: stock.PreviousClose,
+        pe_ratio: stock.PERatio,
+        peg_ratio: stock.PEGRatio,
+        volume: stock.PEGRatio,
+        percent_change: stock.PercentChange
       };
     });
 }
